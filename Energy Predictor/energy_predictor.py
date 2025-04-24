@@ -20,6 +20,7 @@ DATA_DIR = pathlib.Path(__file__).parent / "data"
 Read dc_hourly_sample.csv, coerce whatever timestamp column exists to timestamp, filter the requested site, index by time.
 """
 
+
 def load_energy(site: str) -> pd.DataFrame:
     df = pd.read_csv(DATA_DIR / "dc_hourly_sample.csv")
     # Try to guess the timestamp column ➔ standardise to "timestamp"
@@ -33,42 +34,49 @@ def load_energy(site: str) -> pd.DataFrame:
     df = df.dropna(subset=["timestamp"])
     return df.query("site == @site").set_index("timestamp").sort_index()
 
+
 """
 Ensure an hourly CO₂ file exists (calling make_hourly_from_annual if needed) then return a pd.Series of gCO₂ kWh⁻¹, indexed hourly, for the requested country.
 """
 
+
 def load_carbon(country_code: str, ts_col="datetime"):
     hourly_path = DATA_DIR / "co2_intensity_hourly.csv"
-    if not hourly_path.exists():                # first run ➜ create it
+    if not hourly_path.exists():  # first run ➜ create it
         make_hourly_from_annual(
             src_path=DATA_DIR / "annual_carbon_intensity.csv",
             dst_path=hourly_path
         )
 
     co2 = (pd.read_csv(hourly_path, parse_dates=[ts_col])
-             .query("country == @country_code")
-             .set_index(ts_col)["carbon_intensity_gco2_kwh"]
-             .sort_index())
+           .query("country == @country_code")
+           .set_index(ts_col)["carbon_intensity_gco2_kwh"]
+           .sort_index())
     return co2
+
 
 """
 Add domain features: Δ temperature, hour-of-day, day-of-week, month, IT-load %, rolling-24-h mean of kWh. Drops rows with any fresh NaNs.
 """
+
+
 def engineer(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df_raw.copy()
     # example engineered features
     df["delta_temp"] = df["outside_temp_c"] - df["cooling_setpoint_c"]
     df["hour"] = df.index.hour
-    df["dow"]  = df.index.dayofweek
+    df["dow"] = df.index.dayofweek
     df["month"] = df.index.month
     df["it_load_pct"] = df["it_load_kw"] / df["it_capacity_kw"]
     df["kwh_rolling24h"] = df["energy_kwh"].rolling(24, min_periods=1).mean()
     df = df.dropna()
     return df
 
+
 """
 Split 80 / 20, fit LinearRegression, return model, metrics (MAE, R²) and the (index, y_true, y_pred) triplet for the test partition.
 """
+
 
 def train_and_eval(df: pd.DataFrame, target="energy_kwh"):
     X = df[["it_load_pct", "delta_temp", "hour", "dow",
@@ -80,12 +88,14 @@ def train_and_eval(df: pd.DataFrame, target="energy_kwh"):
     model = LinearRegression().fit(X_tr, y_tr)
     y_pred = model.predict(X_te)
     mae = mean_absolute_error(y_te, y_pred)
-    r2  = r2_score(y_te, y_pred)
+    r2 = r2_score(y_te, y_pred)
     return model, (mae, r2), (X_te.index, y_te, y_pred)
+
 
 """
 For each ± 2 °C scenario, mutate delta_temp, re-run the model, collect predicted kWh.
 """
+
 
 def what_if_setpoint(model, df_subset, delta_c=(-2, +2)):
     """Apply what-if only to the supplied subset (test rows)"""
@@ -99,9 +109,11 @@ def what_if_setpoint(model, df_subset, delta_c=(-2, +2)):
         )
     return scenarios
 
+
 """
 One-off helper: explode an annual carbon-intensity table into an hourly CSV by repeating the annual value for every hour of that year.
 """
+
 
 def make_hourly_from_annual(src_path: pathlib.Path,
                             dst_path: pathlib.Path,
@@ -121,6 +133,7 @@ def make_hourly_from_annual(src_path: pathlib.Path,
         }))
     pd.concat(rows).to_csv(dst_path, index=False)
 
+
 """
 Three visuals:
 (1) time-sorted line plot of test rows, 
@@ -128,14 +141,15 @@ Three visuals:
 (3) residual plot added later in cli().
 """
 
+
 def plot_results(idx, y_true, y_pred, what_if_dict):
     # sort by time for a clean line plot
     order = np.argsort(idx)
-    idx_sorted   = idx[order]
+    idx_sorted = idx[order]
     y_true_sorted = y_true.to_numpy()[order]
     y_pred_sorted = y_pred[order]
 
-    plt.figure(figsize=(10,4))
+    plt.figure(figsize=(10, 4))
     plt.plot(idx_sorted, y_true_sorted, label="Actual", linewidth=1)
     plt.plot(idx_sorted, y_pred_sorted, label="Predicted", linewidth=1)
     plt.title("Hourly Energy Consumption: Actual vs Predicted")
@@ -146,15 +160,15 @@ def plot_results(idx, y_true, y_pred, what_if_dict):
 
     # histogram of deltas (same length as y_pred now)
     # ── Better visual: zoomed-in outline histogram ─────────────────────────
-    plt.figure(figsize=(6,3))
+    plt.figure(figsize=(6, 3))
     for lbl, vals in what_if_dict.items():
         plt.hist(vals - y_pred,
                  bins=40,
-                 histtype="step",         # draw outlines only
+                 histtype="step",  # draw outlines only
                  linewidth=1.4,
                  label=lbl)
 
-    plt.xlim(-0.2, 0.2)                   # focus on tiny energy shifts
+    plt.xlim(-0.2, 0.2)  # focus on tiny energy shifts
     plt.axvline(0, color="k", linewidth=0.5)
     plt.title("Δ Energy from set-point ±2 °C (test set)")
     plt.xlabel("kWh difference from baseline")
@@ -163,10 +177,12 @@ def plot_results(idx, y_true, y_pred, what_if_dict):
     plt.show()
     # ───────────────────────────────────────────────────────────────────────
 
+
 """
 Parses --site, --country, --years, --plot; orchestrates the whole flow: 
 loads data, joins carbon, engineers features, trains, prints metrics, prints what-if numeric summary, and spawns all plots.
 """
+
 
 def cli(argv):
     p = argparse.ArgumentParser(
@@ -253,6 +269,7 @@ def cli(argv):
         plt.ylabel("kWh error")
         plt.tight_layout()
         plt.show()
+
 
 if __name__ == "__main__":
     cli(sys.argv[1:])
